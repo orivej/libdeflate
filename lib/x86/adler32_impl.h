@@ -101,46 +101,51 @@ adler32_avx512bw_chunk(const __m512i *p, const __m512i *const end,
 		       u32 *s1, u32 *s2)
 {
 	const __m512i zeroes = _mm512_setzero_si512();
-	const __v64qi multipliers = (__v64qi){
-		64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49,
-		48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33,
-		32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17,
-		16, 15, 14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,
-	};
-	const __v32hi ones = (__v32hi)_mm512_set1_epi16(1);
-	__v16si v_s1 = (__v16si)zeroes;
-	__v16si v_s1_sums = (__v16si)zeroes;
-	__v16si v_s2 = (__v16si)zeroes;
+	__v16si v_s1_a = (__v16si)zeroes;
+	__v16si v_s1_b = (__v16si)zeroes;
+	__v16si v_s1_c = (__v16si)zeroes;
+	__v16si v_s1_d = (__v16si)zeroes;
+	__v16si v_s2_a = (__v16si)zeroes;
+	__v16si v_s2_b = (__v16si)zeroes;
+	__v16si v_s2_c = (__v16si)zeroes;
+	__v16si v_s2_d = (__v16si)zeroes;
 
 	do {
-		/* Load the next 64-byte segment */
-		__m512i bytes = *p++;
+		__m128i *pp = (__m128i *)p;
 
-		/* Multiply the bytes by 64...1 (the number of times they need
-		 * to be added to s2) and add adjacent pairs */
-		__v32hi sums = (__v32hi)_mm512_maddubs_epi16(
-						bytes, (__m512i)multipliers);
+		__v16si bytes0 = (__v16si)_mm512_cvtepu8_epi32(pp[0]);
+		__v16si bytes1 = (__v16si)_mm512_cvtepu8_epi32(pp[1]);
+		__v16si bytes2 = (__v16si)_mm512_cvtepu8_epi32(pp[2]);
+		__v16si bytes3 = (__v16si)_mm512_cvtepu8_epi32(pp[3]);
 
-		/* Keep sum of all previous s1 counters, for adding to s2 later.
-		 * This allows delaying the multiplication by 64 to the end. */
-		v_s1_sums += v_s1;
+		v_s2_a += v_s1_a;
+		v_s2_b += v_s1_b;
+		v_s2_c += v_s1_c;
+		v_s2_d += v_s1_d;
 
-		/* Add the sum of each group of 8 bytes to the corresponding s1
-		 * counter */
-		v_s1 += (__v16si)_mm512_sad_epu8(bytes, zeroes);
+		v_s1_a += bytes0;
+		v_s1_b += bytes1;
+		v_s1_c += bytes2;
+		v_s1_d += bytes3;
+	} while (++p != end);
 
-		/* Add the sum of each group of 4 products of the bytes by
-		 * 64...1 to the corresponding s2 counter */
-		v_s2 += (__v16si)_mm512_madd_epi16((__m512i)sums,
-						   (__m512i)ones);
-	} while (p != end);
+	v_s2_a += v_s2_c;
+	v_s2_b += v_s2_d;
+	v_s2_a += v_s2_b;
 
-	/* Finish the s2 counters by adding the sum of the s1 values at the
-	 * beginning of each segment, multiplied by the segment size (64) */
-	v_s2 += (__v16si)_mm512_slli_epi32((__m512i)v_s1_sums, 6);
+	v_s2_a = (__v16si)_mm512_slli_epi32((__m512i)v_s2_a, 5);
+
+	v_s2_a += v_s1_a * (__v16si){64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49};
+	v_s2_a += v_s1_b * (__v16si){48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33};
+	v_s2_a += v_s1_c * (__v16si){32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17};
+	v_s2_a += v_s1_d * (__v16si){16, 15, 14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1};
+
+	v_s1_a += v_s1_c;
+	v_s1_b += v_s1_d;
+	v_s1_a += v_s1_b;
 
 	/* Add the counters to the real s1 and s2 */
-	ADLER32_FINISH_VEC_CHUNK_512(s1, s2, v_s1, v_s2);
+	ADLER32_FINISH_VEC_CHUNK_512(s1, s2, v_s1_a, v_s2_a);
 }
 #  include "../adler32_vec_template.h"
 #endif /* AVX-512BW implementation */
@@ -168,43 +173,53 @@ static forceinline ATTRIBUTES void
 adler32_avx2_chunk(const __m256i *p, const __m256i *const end, u32 *s1, u32 *s2)
 {
 	const __m256i zeroes = _mm256_setzero_si256();
-	const __v32qi multipliers = (__v32qi){
-		32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17,
-		16, 15, 14, 13, 12, 11, 10,  9,  8,  7,  6,  5,  4,  3,  2,  1,
-	};
-	const __v16hi ones = (__v16hi)_mm256_set1_epi16(1);
-	__v8si v_s1 = (__v8si)zeroes;
-	__v8si v_s1_sums = (__v8si)zeroes;
-	__v8si v_s2 = (__v8si)zeroes;
+	__v8si v_s1_a = (__v8si)zeroes;
+	__v8si v_s1_b = (__v8si)zeroes;
+	__v8si v_s1_c = (__v8si)zeroes;
+	__v8si v_s1_d = (__v8si)zeroes;
+	__v8si v_s2_a = (__v8si)zeroes;
+	__v8si v_s2_b = (__v8si)zeroes;
+	__v8si v_s2_c = (__v8si)zeroes;
+	__v8si v_s2_d = (__v8si)zeroes;
 
 	do {
-		/* Load the next 32-byte segment */
-		__m256i bytes = *p++;
+		__v8si bytes0 = (__v8si)_mm256_cvtepu8_epi32(
+					_mm_loadu_si128((void *)((u8 *)p + 0)));
+		__v8si bytes1 = (__v8si)_mm256_cvtepu8_epi32(
+					_mm_loadu_si128((void *)((u8 *)p + 8)));
+		__v8si bytes2 = (__v8si)_mm256_cvtepu8_epi32(
+					_mm_loadu_si128((void *)((u8 *)p + 16)));
+		__v8si bytes3 = (__v8si)_mm256_cvtepu8_epi32(
+					_mm_loadu_si128((void *)((u8 *)p + 24)));
 
-		/* Multiply the bytes by 32...1 (the number of times they need
-		 * to be added to s2) and add adjacent pairs */
-		__v16hi sums = (__v16hi)_mm256_maddubs_epi16(
-						bytes, (__m256i)multipliers);
+		v_s2_a += v_s1_a;
+		v_s2_b += v_s1_b;
+		v_s2_c += v_s1_c;
+		v_s2_d += v_s1_d;
 
-		/* Keep sum of all previous s1 counters, for adding to s2 later.
-		 * This allows delaying the multiplication by 32 to the end. */
-		v_s1_sums += v_s1;
+		v_s1_a += bytes0;
+		v_s1_b += bytes1;
+		v_s1_c += bytes2;
+		v_s1_d += bytes3;
+	} while (++p != end);
 
-		/* Add the sum of each group of 8 bytes to the corresponding s1
-		 * counter */
-		v_s1 += (__v8si)_mm256_sad_epu8(bytes, zeroes);
+	v_s2_a += v_s2_c;
+	v_s2_b += v_s2_d;
+	v_s2_a += v_s2_b;
 
-		/* Add the sum of each group of 4 products of the bytes by
-		 * 32...1 to the corresponding s2 counter */
-		v_s2 += (__v8si)_mm256_madd_epi16((__m256i)sums, (__m256i)ones);
-	} while (p != end);
+	v_s2_a = (__v8si)_mm256_slli_epi32((__m256i)v_s2_a, 5);
 
-	/* Finish the s2 counters by adding the sum of the s1 values at the
-	 * beginning of each segment, multiplied by the segment size (32) */
-	v_s2 += (__v8si)_mm256_slli_epi32((__m256i)v_s1_sums, 5);
+	v_s2_a += v_s1_a * (__v8si){ 32, 31, 30, 29, 28, 27, 26, 25 };
+	v_s2_a += v_s1_b * (__v8si){ 24, 23, 22, 21, 20, 19, 18, 17 };
+	v_s2_a += v_s1_c * (__v8si){ 16, 15, 14, 13, 12, 11, 10,  9 };
+	v_s2_a += v_s1_d * (__v8si){  8,  7,  6,  5,  4,  3,  2,  1 };
+
+	v_s1_a += v_s1_c;
+	v_s1_b += v_s1_d;
+	v_s1_a += v_s1_b;
 
 	/* Add the counters to the real s1 and s2 */
-	ADLER32_FINISH_VEC_CHUNK_256(s1, s2, v_s1, v_s2);
+	ADLER32_FINISH_VEC_CHUNK_256(s1, s2, v_s1_a, v_s2_a);
 }
 #  include "../adler32_vec_template.h"
 #endif /* AVX2 implementation */
